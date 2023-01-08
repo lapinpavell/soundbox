@@ -372,10 +372,16 @@ ISR(TIMER1_COMPA_vect)
   // Текущие состояния герконов
   bool switchStateCurrent[SWITCH_NUM];
 
-  // Чтение состояний герконов
+  // Переключение событий по состоянию герконов
   int pin = SWITCH_1_PIN;
   for (int i = 0; pin < SWITCH_NUM; i++) {
-    switchStateCurrent[i] = (bool)digitalRead(pin);
+    switchStateCurrent[i] = (bool)digitalRead(pin); // чтение текущего состояния
+    if (switchStateShadow[i] == LOW && switchStateCurrent[i] == HIGH) { // на передний фронт
+      event = FIGURE_1_PLACED + i; // последняя вставленная фигура
+    } else if (switchStateShadow[i] == HIGH && switchStateCurrent[i] == LOW) { // на задний фронт
+      event = FIGURE_1_REMOVED + i; // последняя вынутая фигура
+    }
+    switchStateShadow[i] = switchStateCurrent[i]; // обновление предыдущего состояния геркона
     pin++;
   }
  
