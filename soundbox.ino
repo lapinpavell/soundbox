@@ -5,6 +5,7 @@
 #include "DFRobotDFPlayerMini.h"
 
 #define DEBUG // вывод в консоль отладочных сообщений
+#define DEBUG_DELAY_MS 2000 // ограничение времени воспроизведения звуков в режиме отладки
 #define SPEAKER_VOLUME_0_30 30 // громкость динамика от 0 до 30
 
 // Период опроса входов (мкс)
@@ -16,13 +17,22 @@ const int16_t compare_val = (int16_t)(EVENT_SWITCH_PERIOD_MCS / 64. - .5);
 #define SOFTWARE_SERIAL_TX_PIN 11
 
 // Пины герконов
+#define SWITCH_NUM 3
 enum {
   SWITCH_1_PIN = 2,
   SWITCH_2_PIN,
   SWITCH_3_PIN,
 };
 
-#define SWITCH_NUM 3
+// Номера звуковых файлов на SD-карте
+enum {
+  START_SOUND = 1,
+  FIGURE_1_SOUND,
+  FIGURE_2_SOUND,
+  FIGURE_3_SOUND,
+  UNLOCK_SOUND,
+  DONE_SOUND,
+};
 
 // Глобальная переменная для отсчета времени до наступления события
 unsigned long elapsedTime = 0;
@@ -205,15 +215,26 @@ void loop()
       break;
 
     case FIGURE_1_PEND:
+      myDFPlayer.play(START_SOUND);
+      delay(DEBUG_DELAY_MS);
       break;
 
     case FIGURE_2_PEND:
+      myDFPlayer.play(FIGURE_1_SOUND);
+      delay(DEBUG_DELAY_MS);
       break;
 
     case FIGURE_3_PEND:
+      myDFPlayer.play(FIGURE_2_SOUND);
+      delay(DEBUG_DELAY_MS);
       break;
 
     case STATE_DONE:
+      myDFPlayer.play(FIGURE_3_SOUND);
+      delay(DEBUG_DELAY_MS);
+      myDFPlayer.play(UNLOCK_SOUND);
+      delay(DEBUG_DELAY_MS);
+      myDFPlayer.play(DONE_SOUND);
       break;
   }
 
