@@ -5,11 +5,16 @@
 #include "DFRobotDFPlayerMini.h"
 
 #define DEBUG // вывод в консоль отладочных сообщений
-#define DEBUG_DELAY_MS 2000 // ограничение времени воспроизведения звуков в режиме отладки
-#define SPEAKER_VOLUME_0_30 30 // громкость динамика от 0 до 30
 
-// Период опроса входов (мкс)
+// Громкость динамика от 0 до 30
+#define SPEAKER_VOLUME_0_30 30
+
+// Задержка переключения состояний
+#define STATE_SWITCH_DELAY_MS 1000
+
+// Период опроса входов
 #define EVENT_SWITCH_PERIOD_MCS 100000ul
+
 const int16_t compare_val = (int16_t)(EVENT_SWITCH_PERIOD_MCS / 64. - .5);
 #define MP3_SERIAL_TIMEOUT_MS 500 // таймаут подключения mp3-плеера по uart
 
@@ -24,6 +29,9 @@ enum {
   SWITCH_3_PIN,
 };
 
+#define MP3_BUSY_PIN 5 // BUSY-пин MP3-плеера
+#define BUZZER_PIN 6 // пин пищалки
+
 // Номера звуковых файлов на SD-карте
 enum {
   START_SOUND = 1,
@@ -36,8 +44,12 @@ enum {
 
 // Глобальная переменная для отсчета времени до наступления события
 unsigned long elapsedTime = 0;
+
 // Интервал времени до наступления события
 const unsigned long TIMER_INTERVAL = 100;
+
+// Текущие состояния герконов
+bool switchStateCurrent[SWITCH_NUM];
 
 // Возможные состояния
 typedef enum {
@@ -73,13 +85,16 @@ volatile EVENT_t event = EVENT_DEFAULT;
 SoftwareSerial mySoftwareSerial(SOFTWARE_SERIAL_RX_PIN, SOFTWARE_SERIAL_TX_PIN);
 DFRobotDFPlayerMini myDFPlayer;
 
-void tim_set(void);
+void tim1_set(void);
 void io_set(void);
 bool eventHappened(EVENT_t event);
+bool isPlayerBusy(void);
 void printDetail(uint8_t type, int value);
 
 void setup()
 {
+  tim1_set();
+  io_set();
   mySoftwareSerial.begin(9600);
 
 #ifdef DEBUG
@@ -89,12 +104,12 @@ void setup()
 #endif
   
   if (!myDFPlayer.begin(mySoftwareSerial)) {  // подключение к плееру по soft uart
-
 #ifdef DEBUG
     Serial.println(F("Unable to begin:"));
     Serial.println(F("1.Please recheck the connection!"));
     Serial.println(F("2.Please insert the SD card!"));
 #endif
+
     while(true);
   }
 
@@ -165,14 +180,54 @@ void setup()
 
 void loop()
 {
+  // Выполнение действий в зависимости от сотояния
+  switch (state) {
+
+    case STATE_START:
+      tone(BUZZER_PIN, 1000 , 700);
+      // event = EVENT_TIMER;
+      break;
+
+    case FIGURE_1_PEND:
+      if (!isPlayerBusy) myDFPlayer.play(START_SOUND);
+      // event = EVENT_TIMER;
+      break;
+
+    case FIGURE_2_PEND:
+      myDFPlayer.play(FIGURE_1_SOUND);
+      // event = EVENT_TIMER;
+      break;
+
+    case FIGURE_3_PEND:
+      myDFPlayer.play(FIGURE_2_SOUND);
+      event = EVENT_TIMER;
+      break;
+
+    case STATE_DONE:
+      myDFPlayer.play(FIGURE_3_SOUND);
+      myDFPlayer.play(UNLOCK_SOUND);
+      myDFPlayer.play(DONE_SOUND);
+      // event = EVENT_TIMER;
+      break;
+  }
+
   // Переключение состояний
   switch (state) {
 
     case STATE_START:
+#ifdef DEBUG
+      Serial.println("STATE_START");
+#endif
+
       state = FIGURE_1_PEND;
+      delay(STATE_SWITCH_DELAY_MS);
       break;
 
     case FIGURE_1_PEND:
+#ifdef DEBUG
+      Serial.println("FIGURE_1_PEND");
+#endif
+
       if (eventHappened(FIGURE_1_PLACED)) {
         state = FIGURE_2_PEND;
       } else if (eventHappened(FIGURE_2_PLACED)) {
@@ -180,17 +235,27 @@ void loop()
       } else if (eventHappened(FIGURE_3_PLACED)) {
         state = STATE_START;
       }
+      delay(STATE_SWITCH_DELAY_MS);
       break;
 
     case FIGURE_2_PEND:
+#ifdef DEBUG
+      Serial.println("FIGURE_2_PEND");
+#endif
+
       if (eventHappened(FIGURE_1_REMOVED)) {
         state = STATE_START;
       } else if (eventHappened(FIGURE_2_PLACED)) {
         state = FIGURE_3_PEND;
       }
+      delay(STATE_SWITCH_DELAY_MS);
       break;
 
     case FIGURE_3_PEND:
+#ifdef DEBUG
+      Serial.println("FIGURE_3_PEND");
+#endif
+
       if (eventHappened(FIGURE_1_REMOVED)) {
         state = STATE_START;
       } else if (eventHappened(FIGURE_2_REMOVED)) {
@@ -198,43 +263,19 @@ void loop()
       } else if (eventHappened(FIGURE_3_PLACED)) {
         state = STATE_DONE;
       }
+      delay(STATE_SWITCH_DELAY_MS);
       break;
 
     case STATE_DONE:
+#ifdef DEBUG
+      Serial.println("STATE_DONE");
+#endif
+
       // Если все фигуры вынуты, перезапуск игры
       if (eventHappened(FIGURE_1_REMOVED) && eventHappened(FIGURE_2_REMOVED) && eventHappened(FIGURE_3_REMOVED)) {
         state = STATE_START;   
-      }     
-      break;
-  }
-
-  // Выполнение действий в зависимости от сотояния
-  switch (state) {
-
-    case STATE_START:
-      break;
-
-    case FIGURE_1_PEND:
-      myDFPlayer.play(START_SOUND);
-      delay(DEBUG_DELAY_MS);
-      break;
-
-    case FIGURE_2_PEND:
-      myDFPlayer.play(FIGURE_1_SOUND);
-      delay(DEBUG_DELAY_MS);
-      break;
-
-    case FIGURE_3_PEND:
-      myDFPlayer.play(FIGURE_2_SOUND);
-      delay(DEBUG_DELAY_MS);
-      break;
-
-    case STATE_DONE:
-      myDFPlayer.play(FIGURE_3_SOUND);
-      delay(DEBUG_DELAY_MS);
-      myDFPlayer.play(UNLOCK_SOUND);
-      delay(DEBUG_DELAY_MS);
-      myDFPlayer.play(DONE_SOUND);
+      }
+      delay(STATE_SWITCH_DELAY_MS);    
       break;
   }
 
@@ -285,20 +326,67 @@ void io_set(void)
   pinMode(SWITCH_1_PIN, INPUT);
   pinMode(SWITCH_2_PIN, INPUT);
   pinMode(SWITCH_3_PIN, INPUT);
+  pinMode(MP3_BUSY_PIN, INPUT);
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
 }
 
-// Возвращает true если событие случилось, иначе false
+// Возвращает true, если событие произошло, иначе - false
 bool eventHappened(EVENT_t event)
 {
-  if (event == EVENT_TIMER) {
-    if (millis() - elapsedTime >= TIMER_INTERVAL) {
-      elapsedTime = millis();
-
-      return true;
+  // Проверка фигур
+  static bool switchStateShadow[SWITCH_NUM] = { LOW, LOW, LOW }; // предыдущие состояния герконов
+  for (int i = 0; i < SWITCH_NUM; i++) {
+    if (switchStateShadow[i] == LOW && switchStateCurrent[i] == HIGH) { // на передний фронт
+      Serial.println("rising edge!");
+      event = FIGURE_1_PLACED + i; // последняя вставленная фигура
+    } else if (switchStateShadow[i] == HIGH && switchStateCurrent[i] == LOW) { // на задний фронт
+      Serial.println("falling edge!");
+      event = FIGURE_1_REMOVED + i; // последняя вынутая фигура
     }
+    switchStateShadow[i] = switchStateCurrent[i]; // обновление предыдущего состояния геркона
   }
 
-  return false;
+  // Обработка событий
+  switch (event)
+  {
+    default:
+#ifdef DEBUG
+      Serial.println("Event NOT happened!");
+#endif
+
+      return false;
+      break;
+
+    case FIGURE_1_PLACED:
+    case FIGURE_2_PLACED:
+    case FIGURE_3_PLACED:
+      if (millis() - elapsedTime >= TIMER_INTERVAL) {
+        elapsedTime = millis();
+        while(isPlayerBusy()); // ожидание завершения проигрывания файла // TODO: проверка на "вынимание"
+
+#ifdef DEBUG
+        Serial.println("Event happened!");
+#endif
+        return true;
+      }
+      break;
+
+    case FIGURE_1_REMOVED:
+    case FIGURE_2_REMOVED:
+    case FIGURE_3_REMOVED:
+      // event = EVENT_DEFAULT;
+      return true;
+      break;
+  }
+}
+
+// Возвращает true если mp3 модуль занят воспроизведением, иначе false
+bool isPlayerBusy(void)
+{
+  bool busyFlag = !((bool)digitalRead(MP3_BUSY_PIN));
+  return busyFlag;
 }
 
 // Вывод информации по mp3 модулю
@@ -384,26 +472,19 @@ void printDetail(uint8_t type, int value)
   
 }
 
-// Вызов событий в прерывании по таймеру
+// Проверка состояний входов в прерывании по таймеру
 ISR(TIMER1_COMPA_vect)
 {
-  // Предыдущие состояния герконов
-  static bool switchStateShadow[SWITCH_NUM] = { LOW, LOW, LOW };
-
-  // Текущие состояния герконов
-  bool switchStateCurrent[SWITCH_NUM];
-
-  // Переключение событий по состоянию герконов
   int pin = SWITCH_1_PIN;
-  for (int i = 0; pin < SWITCH_NUM; i++) {
-    switchStateCurrent[i] = (bool)digitalRead(pin); // чтение текущего состояния
-    if (switchStateShadow[i] == LOW && switchStateCurrent[i] == HIGH) { // на передний фронт
-      event = FIGURE_1_PLACED + i; // последняя вставленная фигура
-    } else if (switchStateShadow[i] == HIGH && switchStateCurrent[i] == LOW) { // на задний фронт
-      event = FIGURE_1_REMOVED + i; // последняя вынутая фигура
-    }
-    switchStateShadow[i] = switchStateCurrent[i]; // обновление предыдущего состояния геркона
-    pin++;
+  for (int i = 0; i < SWITCH_NUM; i++) {
+    switchStateCurrent[i] = ((bool)digitalRead(pin + i)); // чтение текущего состояния
   }
+
+#ifdef DEBUG
+  // Мигание встроенным светодиодом
+  static bool ledState = false;
+  digitalWrite(LED_BUILTIN, ledState);
+  ledState = !ledState;
+#endif
  
 }
