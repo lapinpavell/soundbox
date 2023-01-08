@@ -1,52 +1,75 @@
 
 #include "Arduino.h"
+#include <avr/interrupt.h>
 #include "SoftwareSerial.h"
 #include "DFRobotDFPlayerMini.h"
 
-#define DEBUG
-#define SPEAKER_VOLUME_0_30 5     // громкость динамика от 0 до 30
-#define MP3_SERIAL_TIMEOUT_MS 500 // таймаут подключения по uart
+#define DEBUG // вывод в консоль отладочных сообщений
+#define SPEAKER_VOLUME_0_30 30 // громкость динамика от 0 до 30
 
-// Define the possible states of the state machine
-enum State {
-  STATE_A,
-  STATE_B,
-  STATE_C,
-  STATE_D
+// Период опроса входов (мкс)
+#define EVENT_SWITCH_PERIOD_MCS 100000ul
+const int16_t compare_val = (int16_t)(EVENT_SWITCH_PERIOD_MCS / 64. - .5);
+#define MP3_SERIAL_TIMEOUT_MS 500 // таймаут подключения mp3-плеера по uart
+
+#define SOFTWARE_SERIAL_RX_PIN 10 // пины для управления mp3-плеером по uart
+#define SOFTWARE_SERIAL_TX_PIN 11
+
+// Пины герконов
+enum {
+  SWITCH_1_PIN = 2,
+  SWITCH_2_PIN,
+  SWITCH_3_PIN,
 };
 
-// Define the possible events that can trigger a transition
-enum Event {
-  EVENT_1,
-  EVENT_2,
-  EVENT_3,
-  EVENT_4,
-  EVENT_TIMER
-};
+#define SWITCH_NUM 3
 
+// Глобальная переменная для отсчета времени до наступления события
+unsigned long elapsedTime = 0;
+// Интервал времени до наступления события
+const unsigned long TIMER_INTERVAL = 100;
 
+// Возможные состояния
+typedef enum {
+  STATE_START,
+  FIGURE_1_PEND, // ожидание установки первой фигуры
+  FIGURE_2_PEND, // ожидание установки второй фигуры
+  FIGURE_3_PEND, // ожидание установки третьей фигуры
+  STATE_DONE,
+} STATE_t;
 
-SoftwareSerial mySoftwareSerial(10, 11);
+// Первоначальное состояние
+volatile STATE_t state = STATE_START;
 
+// Возможные события
+typedef enum {
+  EVENT_DEFAULT,    // событие по умолчанию
+  EVENT_TIMER,      // начало отсчета до наступления события
+  FIGURE_1_PLACED,  // фигура 1 установлена
+  FIGURE_2_PLACED,  // фигура 2 установлена
+  FIGURE_3_PLACED,  // фигура 3 установлена
+  FIGURE_1_REMOVED, // фигура 1 вынута
+  FIGURE_2_REMOVED, // фигура 2 вынута
+  FIGURE_3_REMOVED, // фигура 3 вынута
+  BOX_UNLOCKED,     // замок открылся  
+  BOX_LOCKED,       // замок закрылся
+  BOX_OPENED,       // крышка шкатулки открылась
+  BOX_CLOSED,       // крышка шкатулки закрылась
+} EVENT_t;
+
+// Событие по умолчанию
+volatile EVENT_t event = EVENT_DEFAULT;
+
+SoftwareSerial mySoftwareSerial(SOFTWARE_SERIAL_RX_PIN, SOFTWARE_SERIAL_TX_PIN);
 DFRobotDFPlayerMini myDFPlayer;
 
+void tim_set(void);
+void io_set(void);
+bool eventHappened(EVENT_t event);
 void printDetail(uint8_t type, int value);
-
-// Define the state machine
-State currentState = STATE_A;
-
-// Define a global variable to keep track of the elapsed time
-unsigned long elapsedTime = 0;
-
-// Define the timer interval, in milliseconds
-const unsigned long TIMER_INTERVAL = 100;
 
 void setup()
 {
-  pinMode(2, INPUT);
-  pinMode(3, INPUT);
-  pinMode(4, INPUT);
-
   mySoftwareSerial.begin(9600);
 
 #ifdef DEBUG
@@ -132,54 +155,69 @@ void setup()
 
 void loop()
 {
+  // Переключение состояний
+  switch (state) {
 
-  // Check for events and trigger transitions based on current state
-  switch (currentState) {
-    case STATE_A:
-      if (eventHappened(EVENT_1)) {
-        currentState = STATE_B;
-      } else if (eventHappened(EVENT_2)) {
-        currentState = STATE_C;
+    case STATE_START:
+      state = FIGURE_1_PEND;
+      break;
+
+    case FIGURE_1_PEND:
+      if (eventHappened(FIGURE_1_PLACED)) {
+        state = FIGURE_2_PEND;
+      } else if (eventHappened(FIGURE_2_PLACED)) {
+        state = STATE_START;
+      } else if (eventHappened(FIGURE_3_PLACED)) {
+        state = STATE_START;
       }
       break;
-    case STATE_B:
-      if (eventHappened(EVENT_3)) {
-        currentState = STATE_D;
-      } else if (eventHappened(EVENT_4)) {
-        currentState = STATE_A;
+
+    case FIGURE_2_PEND:
+      if (eventHappened(FIGURE_1_REMOVED)) {
+        state = STATE_START;
+      } else if (eventHappened(FIGURE_2_PLACED)) {
+        state = FIGURE_3_PEND;
       }
       break;
-    case STATE_C:
-      if (eventHappened(EVENT_1)) {
-        currentState = STATE_D;
-      } else if (eventHappened(EVENT_4)) {
-        currentState = STATE_A;
+
+    case FIGURE_3_PEND:
+      if (eventHappened(FIGURE_1_REMOVED)) {
+        state = STATE_START;
+      } else if (eventHappened(FIGURE_2_REMOVED)) {
+        state = STATE_START;
+      } else if (eventHappened(FIGURE_3_PLACED)) {
+        state = STATE_DONE;
       }
       break;
-    case STATE_D:
-      if (eventHappened(EVENT_2)) {
-        currentState = STATE_C;
-      } else if (eventHappened(EVENT_3)) {
-        currentState = STATE_B;
-      }
+
+    case STATE_DONE:
+      // Если все фигуры вынуты, перезапуск игры
+      if (eventHappened(FIGURE_1_REMOVED) && eventHappened(FIGURE_2_REMOVED) && eventHappened(FIGURE_3_REMOVED)) {
+        state = STATE_START;   
+      }     
       break;
   }
 
-  // Perform actions based on the current state
-  switch (currentState) {
-    case STATE_A:
-      // Perform actions for STATE_A here
+  // Выполнение действий в зависимости от сотояния
+  switch (state) {
+
+    case STATE_START:
       break;
-    case STATE_B:
-      // Perform actions for STATE_B here
+
+    case FIGURE_1_PEND:
       break;
-    case STATE_C:
-      // Perform actions for STATE_C here
+
+    case FIGURE_2_PEND:
       break;
-    case STATE_D:
-      // Perform actions for STATE_D here
+
+    case FIGURE_3_PEND:
+      break;
+
+    case STATE_DONE:
       break;
   }
+
+#if 0
   static unsigned long timer = millis();
   
   if (millis() - timer > 500) {
@@ -194,6 +232,7 @@ void loop()
       myDFPlayer.play(3);
     }
   }
+#endif
 
 #ifdef DEBUG
   if (myDFPlayer.available()) {
@@ -202,6 +241,46 @@ void loop()
 #endif
 }
 
+// Инициализация Timer1
+void tim1_set(void)
+{
+  cli();
+  TCCR1A = 0;
+  TCCR1B = 0;
+
+  OCR1A = compare_val; // установка регистра совпадения
+
+  TCCR1B |= (1 << WGM12);
+  TCCR1B |= (1 << CS10); // /1024
+  TCCR1B |= (1 << CS12);
+
+  TIMSK1 |= (1 << OCIE1A);
+  sei();
+}
+
+// Инициализация входов/выходов
+void io_set(void)
+{
+  pinMode(SWITCH_1_PIN, INPUT);
+  pinMode(SWITCH_2_PIN, INPUT);
+  pinMode(SWITCH_3_PIN, INPUT);
+}
+
+// Возвращает true если событие случилось, иначе false
+bool eventHappened(EVENT_t event)
+{
+  if (event == EVENT_TIMER) {
+    if (millis() - elapsedTime >= TIMER_INTERVAL) {
+      elapsedTime = millis();
+
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Вывод информации по mp3 модулю
 void printDetail(uint8_t type, int value)
 {
   switch (type) {
@@ -284,26 +363,20 @@ void printDetail(uint8_t type, int value)
   
 }
 
-// Returns true if the specified event has happened, false otherwise
-bool eventHappened(Event event) {
-  // Check for the event based on the state of input pins or other sensors
-  // You can use Arduino functions such as digitalRead() or analogRead() to
-  // check for events based on the state of input pins or other sensors.
-  // You can also use libraries or other functions to check for events based
-  // on external conditions, such as a button press or a timer expiration.
+// Вызов событий в прерывании по таймеру
+ISR(TIMER1_COMPA_vect)
+{
+  // Предыдущие состояния герконов
+  static bool switchStateShadow[SWITCH_NUM] = { LOW, LOW, LOW };
 
-  // Check for the timer event
-  if (event == EVENT_TIMER) {
-    // Check if the elapsed time is greater than or equal to the timer interval
-    if (millis() - elapsedTime >= TIMER_INTERVAL) {
-      // Reset the elapsed time
-      elapsedTime = millis();
-      // Return true to indicate that the event has happened
-      return true;
-    }
+  // Текущие состояния герконов
+  bool switchStateCurrent[SWITCH_NUM];
+
+  // Чтение состояний герконов
+  int pin = SWITCH_1_PIN;
+  for (int i = 0; pin < SWITCH_NUM; i++) {
+    switchStateCurrent[i] = (bool)digitalRead(pin);
+    pin++;
   }
-
-  // Return false if the event has not happened
-  return false;
+ 
 }
-
