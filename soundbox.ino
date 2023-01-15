@@ -7,7 +7,7 @@
 #define DEBUG // вывод в консоль отладочных сообщений
 
 // Громкость динамика от 0 до 30
-#define SPEAKER_VOLUME_0_30 30
+#define SPEAKER_VOLUME_0_30 25
 
 // Задержка переключения состояний
 #define STATE_SWITCH_DELAY_MS 1000
@@ -29,17 +29,24 @@ enum {
   SWITCH_3_PIN,
 };
 
+// Состояние фигур
+enum {
+  MISSING,  // отсутствует
+  REMOVED,  // вынута
+  ONHOLD,   // на удержании
+  PLACED,   // вставлена
+};
+
 #define MP3_BUSY_PIN 5 // BUSY-пин MP3-плеера
 #define BUZZER_PIN 6 // пин пищалки
 
 // Номера звуковых файлов на SD-карте
 enum {
-  START_SOUND = 1,
-  FIGURE_1_SOUND,
+  FIGURE_1_SOUND = 1,
   FIGURE_2_SOUND,
   FIGURE_3_SOUND,
   UNLOCK_SOUND,
-  DONE_SOUND,
+  ERROR_SOUND,
 };
 
 // Глобальная переменная для отсчета времени до наступления события
@@ -121,15 +128,6 @@ void setup()
   myDFPlayer.volume(SPEAKER_VOLUME_0_30); // громкость
   myDFPlayer.EQ(DFPLAYER_EQ_NORMAL); // эквалайзер
   myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD); // подключение SD-карты
-  
-#if 0
-  myDFPlayer.sleep();      // sleep
-  myDFPlayer.reset();      // Reset the module
-  myDFPlayer.enableDAC();  // Enable On-chip DAC
-  myDFPlayer.disableDAC(); // Disable On-chip DAC
-  myDFPlayer.outputSetting(true, 15); // output setting, enable the output and set the gain to 15
-#endif
-  
 
 #if 0
   myDFPlayer.next();  //Play next mp3
@@ -185,31 +183,34 @@ void loop()
 
     case STATE_START:
       tone(BUZZER_PIN, 1000 , 700);
-      // event = EVENT_TIMER;
+      delay(2000);
       break;
 
     case FIGURE_1_PEND:
-      if (!isPlayerBusy) myDFPlayer.play(START_SOUND);
-      // event = EVENT_TIMER;
       break;
 
     case FIGURE_2_PEND:
-      myDFPlayer.play(FIGURE_1_SOUND);
-      // event = EVENT_TIMER;
+      if (!isPlayerBusy()) myDFPlayer.play(FIGURE_1_SOUND);
       break;
 
     case FIGURE_3_PEND:
-      myDFPlayer.play(FIGURE_2_SOUND);
-      event = EVENT_TIMER;
+      if (!isPlayerBusy()) myDFPlayer.play(FIGURE_2_SOUND);
       break;
 
     case STATE_DONE:
-      myDFPlayer.play(FIGURE_3_SOUND);
-      myDFPlayer.play(UNLOCK_SOUND);
-      myDFPlayer.play(DONE_SOUND);
-      // event = EVENT_TIMER;
+      if (!isPlayerBusy()) {
+        myDFPlayer.play(FIGURE_3_SOUND);
+        delay(200);
+        while(isPlayerBusy());
+        delay(200);
+        myDFPlayer.play(UNLOCK_SOUND);
+      }
       break;
   }
+
+  // Ожидание окончания проигрывания файла
+  delay(200);
+  while(isPlayerBusy());
 
   // Переключение состояний
   switch (state) {
@@ -231,9 +232,13 @@ void loop()
       if (eventHappened(FIGURE_1_PLACED)) {
         state = FIGURE_2_PEND;
       } else if (eventHappened(FIGURE_2_PLACED)) {
-        state = STATE_START;
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
       } else if (eventHappened(FIGURE_3_PLACED)) {
-        state = STATE_START;
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
       }
       delay(STATE_SWITCH_DELAY_MS);
       break;
@@ -244,9 +249,15 @@ void loop()
 #endif
 
       if (eventHappened(FIGURE_1_REMOVED)) {
-        state = STATE_START;
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
       } else if (eventHappened(FIGURE_2_PLACED)) {
         state = FIGURE_3_PEND;
+      } else if (eventHappened(FIGURE_3_PLACED)) {
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
       }
       delay(STATE_SWITCH_DELAY_MS);
       break;
@@ -257,9 +268,13 @@ void loop()
 #endif
 
       if (eventHappened(FIGURE_1_REMOVED)) {
-        state = STATE_START;
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
       } else if (eventHappened(FIGURE_2_REMOVED)) {
-        state = STATE_START;
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
       } else if (eventHappened(FIGURE_3_PLACED)) {
         state = STATE_DONE;
       }
@@ -279,24 +294,13 @@ void loop()
       break;
   }
 
-#if 0
-  static unsigned long timer = millis();
-  
-  if (millis() - timer > 500) {
-    timer = millis();
-    if (digitalRead(2)) {
-      myDFPlayer.play(1);
-    }
-    if (digitalRead(3)) {
-      myDFPlayer.play(2);
-    }
-    if (digitalRead(4)) {
-      myDFPlayer.play(3);
-    }
-  }
-#endif
-
 #ifdef DEBUG
+  Serial.print("switch state ");
+  Serial.print(switchStateCurrent[0], HEX);
+  Serial.print(switchStateCurrent[1], HEX);
+  Serial.print(switchStateCurrent[2], HEX);
+  Serial.println();
+
   if (myDFPlayer.available()) {
     printDetail(myDFPlayer.readType(), myDFPlayer.read()); // мониторинг сообщений от плеера
   }
@@ -335,57 +339,84 @@ void io_set(void)
 // Возвращает true, если событие произошло, иначе - false
 bool eventHappened(EVENT_t event)
 {
-  // Проверка фигур
-  static bool switchStateShadow[SWITCH_NUM] = { LOW, LOW, LOW }; // предыдущие состояния герконов
-  for (int i = 0; i < SWITCH_NUM; i++) {
-    if (switchStateShadow[i] == LOW && switchStateCurrent[i] == HIGH) { // на передний фронт
-      Serial.println("rising edge!");
-      event = FIGURE_1_PLACED + i; // последняя вставленная фигура
-    } else if (switchStateShadow[i] == HIGH && switchStateCurrent[i] == LOW) { // на задний фронт
-      Serial.println("falling edge!");
-      event = FIGURE_1_REMOVED + i; // последняя вынутая фигура
-    }
-    switchStateShadow[i] = switchStateCurrent[i]; // обновление предыдущего состояния геркона
-  }
+  bool isHappened = false;
 
   // Обработка событий
   switch (event)
   {
     default:
-#ifdef DEBUG
-      Serial.println("Event NOT happened!");
-#endif
-
-      return false;
+      isHappened = false;
       break;
 
     case FIGURE_1_PLACED:
-    case FIGURE_2_PLACED:
-    case FIGURE_3_PLACED:
-      if (millis() - elapsedTime >= TIMER_INTERVAL) {
-        elapsedTime = millis();
-        while(isPlayerBusy()); // ожидание завершения проигрывания файла // TODO: проверка на "вынимание"
+      if (checkFigure(0) == PLACED) {
+        Serial.println("figure 1 placed!");
+        isHappened = true;
+      }
+      break;
 
-#ifdef DEBUG
-        Serial.println("Event happened!");
-#endif
-        return true;
+    case FIGURE_2_PLACED:
+      if (checkFigure(1) == PLACED) {
+        Serial.println("figure 2 placed!");
+        isHappened = true;
+      }
+      break;
+
+    case FIGURE_3_PLACED:
+      if (checkFigure(2) == PLACED) {
+        Serial.println("figure 3 placed!");
+        isHappened = true;
       }
       break;
 
     case FIGURE_1_REMOVED:
+      if (checkFigure(0) == REMOVED) {
+        isHappened = true;
+      }
+      break;
+
     case FIGURE_2_REMOVED:
+      if (checkFigure(1) == REMOVED) {
+        isHappened = true;
+      }
+      break;
+
     case FIGURE_3_REMOVED:
-      // event = EVENT_DEFAULT;
-      return true;
+      if (checkFigure(2) == REMOVED) {
+        isHappened = true;
+      }
       break;
   }
+
+  return isHappened;
+}
+
+// Проверка фигур
+int checkFigure(int figure)
+{
+  int figureState;
+  static bool switchStateShadow[SWITCH_NUM] = { LOW, LOW, LOW }; // предыдущие состояния герконов
+
+  if (switchStateShadow[figure] == LOW && switchStateCurrent[figure] == HIGH) { // на передний фронт
+    figureState = PLACED;
+    Serial.println("placed!");
+  } else if (switchStateShadow[figure] == HIGH && switchStateCurrent[figure] == LOW) { // на задний фронт
+    figureState = REMOVED;
+  } else if (switchStateShadow[figure] == HIGH && switchStateCurrent[figure] == HIGH) {
+    figureState = ONHOLD;
+  } else {
+    figureState = MISSING;
+  }
+  switchStateShadow[figure] = switchStateCurrent[figure]; // обновление предыдущего состояния геркона
+
+  return figureState;
 }
 
 // Возвращает true если mp3 модуль занят воспроизведением, иначе false
 bool isPlayerBusy(void)
 {
   bool busyFlag = !((bool)digitalRead(MP3_BUSY_PIN));
+  // if (busyFlag) Serial.println("player busy!");
   return busyFlag;
 }
 
@@ -480,11 +511,8 @@ ISR(TIMER1_COMPA_vect)
     switchStateCurrent[i] = ((bool)digitalRead(pin + i)); // чтение текущего состояния
   }
 
-#ifdef DEBUG
   // Мигание встроенным светодиодом
   static bool ledState = false;
   digitalWrite(LED_BUILTIN, ledState);
   ledState = !ledState;
-#endif
- 
 }
