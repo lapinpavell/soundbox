@@ -95,6 +95,7 @@ DFRobotDFPlayerMini myDFPlayer;
 
 void tim1_set(void);
 void io_set(void);
+void player_set(void);
 bool eventHappened(EVENT_t event);
 bool isPlayerBusy(void);
 void printDetail(uint8_t type, int value);
@@ -103,87 +104,21 @@ void setup()
 {
   tim1_set();
   io_set();
-  mySoftwareSerial.begin(9600);
-
-#ifdef DEBUG
-  Serial.begin(115200);
-  Serial.println();
-  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
-#endif
-  
-  if (!myDFPlayer.begin(mySoftwareSerial)) {  // подключение к плееру по soft uart
-#ifdef DEBUG
-    Serial.println(F("Unable to begin:"));
-    Serial.println(F("1.Please recheck the connection!"));
-    Serial.println(F("2.Please insert the SD card!"));
-#endif
-
-    while(true);
-  }
-
-#ifdef DEBUG
-  Serial.println(F("DFPlayer Mini online."));
-#endif
-  
-  myDFPlayer.setTimeOut(MP3_SERIAL_TIMEOUT_MS); // таймаут
-  myDFPlayer.volume(SPEAKER_VOLUME_0_30); // громкость
-  myDFPlayer.EQ(DFPLAYER_EQ_NORMAL); // эквалайзер
-  myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD); // подключение SD-карты
-
-#if 0
-  myDFPlayer.next();  //Play next mp3
-  delay(1000);
-  myDFPlayer.previous();  //Play previous mp3
-  delay(1000);
-  myDFPlayer.play(1);  //Play the first mp3
-  delay(1000);
-  myDFPlayer.loop(1);  //Loop the first mp3
-  delay(1000);
-  myDFPlayer.pause();  //pause the mp3
-  delay(1000);
-  myDFPlayer.start();  //start the mp3 from the pause
-  delay(1000);
-  myDFPlayer.playFolder(15, 4);  //play specific mp3 in SD:/15/004.mp3; Folder Name(1~99); File Name(1~255)
-  delay(1000);
-  myDFPlayer.enableLoopAll(); //loop all mp3 files.
-  delay(1000);
-  myDFPlayer.disableLoopAll(); //stop loop all mp3 files.
-  delay(1000);
-  myDFPlayer.playMp3Folder(4); //play specific mp3 in SD:/MP3/0004.mp3; File Name(0~65535)
-  delay(1000);
-  myDFPlayer.advertise(3); //advertise specific mp3 in SD:/ADVERT/0003.mp3; File Name(0~65535)
-  delay(1000);
-  myDFPlayer.stopAdvertise(); //stop advertise
-  delay(1000);
-  myDFPlayer.playLargeFolder(2, 999); //play specific mp3 in SD:/02/004.mp3; Folder Name(1~10); File Name(1~1000)
-  delay(1000);
-  myDFPlayer.loopFolder(5); //loop all mp3 files in folder SD:/05.
-  delay(1000);
-  myDFPlayer.randomAll(); //Random play all the mp3.
-  delay(1000);
-  myDFPlayer.enableLoop(); //enable loop.
-  delay(1000);
-  myDFPlayer.disableLoop(); //disable loop.
-  delay(1000);
-#endif
-
-#ifdef DEBUG
-  Serial.println(myDFPlayer.readState()); // состояние MP3 модуля
-  Serial.println(myDFPlayer.readVolume()); // текущая громкость
-  Serial.println(myDFPlayer.readEQ()); // текущие настройки эквалайзера
-  Serial.println(myDFPlayer.readFileCounts()); // количество файлов на SD-карте
-  Serial.println(myDFPlayer.readCurrentFileNumber()); // номер текущего файла
-  Serial.println(myDFPlayer.readFileCountsInFolder(1)); // количество файлов в папке SD:/01
-#endif
+  player_set();
 }
 
 void loop()
 {
+  static bool playedBefore[3] = { false, false, false }; // флаг, чтобы один файл не проигрывался два раза
+
   // Выполнение действий в зависимости от сотояния
   switch (state) {
 
     case STATE_START:
       tone(BUZZER_PIN, 1000 , 700);
+      for (int i = 0; i < 3; i++) {
+        playedBefore[i] = false;
+      }
       delay(2000);
       break;
 
@@ -196,20 +131,28 @@ void loop()
       break;
 
     case FIGURE_2_PEND:
-      if (!isPlayerBusy()) myDFPlayer.play(FIGURE_1_SOUND);
+      if (!isPlayerBusy() && !playedBefore[0]) {
+        myDFPlayer.play(FIGURE_1_SOUND);
+        playedBefore[0] = true;
+      }
       break;
 
     case FIGURE_3_PEND:
-      if (!isPlayerBusy()) myDFPlayer.play(FIGURE_2_SOUND);
+      if (!isPlayerBusy() && !playedBefore[1]) {
+        myDFPlayer.play(FIGURE_2_SOUND);
+        playedBefore[1] = true;
+      }
       break;
 
     case STATE_DONE:
-      if (!isPlayerBusy()) {
+      if (!isPlayerBusy() && !playedBefore[2]) {
         myDFPlayer.play(FIGURE_3_SOUND);
+        playedBefore[2] = true;
         delay(200);
         while(isPlayerBusy());
         delay(200);
         myDFPlayer.play(UNLOCK_SOUND);
+        // TODO: открыть замок
       }
       break;
   }
@@ -281,7 +224,7 @@ void loop()
 #endif
 
       // Если все фигуры вынуты, перезапуск игры
-      if (eventHappened(FIGURE_1_REMOVED) && eventHappened(FIGURE_2_REMOVED) && eventHappened(FIGURE_3_REMOVED)) {
+      if (eventHappened(FIGURE_1_REMOVED) && eventHappened(FIGURE_2_REMOVED) && eventHappened(FIGURE_3_REMOVED)) { // TODO
         state = STATE_START;   
       }
       delay(STATE_SWITCH_DELAY_MS);    
@@ -330,12 +273,51 @@ void io_set(void)
   pinMode(BUZZER_PIN, OUTPUT);
 }
 
+// Инициализация и настройка плеера
+void player_set(void)
+{
+  mySoftwareSerial.begin(9600);
+
+#ifdef DEBUG
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
+#endif
+  
+  if (!myDFPlayer.begin(mySoftwareSerial)) {  // подключение к плееру по soft uart
+#ifdef DEBUG
+    Serial.println(F("Unable to begin:"));
+    Serial.println(F("1.Please recheck the connection!"));
+    Serial.println(F("2.Please insert the SD card!"));
+#endif
+
+    while(true);
+  }
+
+#ifdef DEBUG
+  Serial.println(F("DFPlayer Mini online."));
+#endif
+  
+  myDFPlayer.setTimeOut(MP3_SERIAL_TIMEOUT_MS); // таймаут
+  myDFPlayer.volume(SPEAKER_VOLUME_0_30); // громкость
+  myDFPlayer.EQ(DFPLAYER_EQ_NORMAL); // эквалайзер
+  myDFPlayer.outputDevice(DFPLAYER_DEVICE_SD); // подключение SD-карты
+
+#ifdef DEBUG
+  Serial.println(myDFPlayer.readState()); // состояние MP3 модуля
+  Serial.println(myDFPlayer.readVolume()); // текущая громкость
+  Serial.println(myDFPlayer.readEQ()); // текущие настройки эквалайзера
+  Serial.println(myDFPlayer.readFileCounts()); // количество файлов на SD-карте
+  Serial.println(myDFPlayer.readCurrentFileNumber()); // номер текущего файла
+  Serial.println(myDFPlayer.readFileCountsInFolder(1)); // количество файлов в папке SD:/01
+#endif
+}
+
 // Возвращает true, если событие произошло, иначе - false
 bool eventHappened(EVENT_t event)
 {
   bool isHappened = false;
 
-  // Обработка событий
   switch (event)
   {
     default:
@@ -344,21 +326,18 @@ bool eventHappened(EVENT_t event)
 
     case FIGURE_1_PLACED:
       if (checkFigure(0) == PLACED) {
-        Serial.println("figure 1 placed!");
         isHappened = true;
       }
       break;
 
     case FIGURE_2_PLACED:
       if (checkFigure(1) == PLACED) {
-        Serial.println("figure 2 placed!");
         isHappened = true;
       }
       break;
 
     case FIGURE_3_PLACED:
       if (checkFigure(2) == PLACED) {
-        Serial.println("figure 3 placed!");
         isHappened = true;
       }
       break;
@@ -393,7 +372,6 @@ int checkFigure(int figure)
 
   if (switchStateShadow[figure] == LOW && switchStateCurrent[figure] == HIGH) { // на передний фронт
     figureState = PLACED;
-    Serial.println("placed!");
   } else if (switchStateShadow[figure] == HIGH && switchStateCurrent[figure] == LOW) { // на задний фронт
     figureState = REMOVED;
   } else if (switchStateShadow[figure] == HIGH && switchStateCurrent[figure] == HIGH) {
@@ -410,7 +388,6 @@ int checkFigure(int figure)
 bool isPlayerBusy(void)
 {
   bool busyFlag = !((bool)digitalRead(MP3_BUSY_PIN));
-  // if (busyFlag) Serial.println("player busy!");
   return busyFlag;
 }
 
