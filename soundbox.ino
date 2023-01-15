@@ -32,9 +32,9 @@ enum {
 // Состояние фигур
 enum {
   MISSING,  // отсутствует
-  REMOVED,  // вынута
-  ONHOLD,   // на удержании
-  PLACED,   // вставлена
+  REMOVED,  // только что вынута
+  ONHOLD,   // всё ещё вставлена
+  PLACED,   // только что вставлена
 };
 
 #define MP3_BUSY_PIN 5 // BUSY-пин MP3-плеера
@@ -61,6 +61,7 @@ bool switchStateCurrent[SWITCH_NUM];
 // Возможные состояния
 typedef enum {
   STATE_START,
+  STATE_WRONG,   // ошибка
   FIGURE_1_PEND, // ожидание установки первой фигуры
   FIGURE_2_PEND, // ожидание установки второй фигуры
   FIGURE_3_PEND, // ожидание установки третьей фигуры
@@ -186,6 +187,11 @@ void loop()
       delay(2000);
       break;
 
+    case STATE_WRONG:
+        myDFPlayer.play(ERROR_SOUND);
+        delay(2000);
+        state = FIGURE_1_PEND;
+
     case FIGURE_1_PEND:
       break;
 
@@ -232,13 +238,9 @@ void loop()
       if (eventHappened(FIGURE_1_PLACED)) {
         state = FIGURE_2_PEND;
       } else if (eventHappened(FIGURE_2_PLACED)) {
-        myDFPlayer.play(ERROR_SOUND);
-        delay(2000);
-        state = FIGURE_1_PEND;
+        state = STATE_WRONG;
       } else if (eventHappened(FIGURE_3_PLACED)) {
-        myDFPlayer.play(ERROR_SOUND);
-        delay(2000);
-        state = FIGURE_1_PEND;
+        state = STATE_WRONG;
       }
       delay(STATE_SWITCH_DELAY_MS);
       break;
@@ -249,15 +251,11 @@ void loop()
 #endif
 
       if (eventHappened(FIGURE_1_REMOVED)) {
-        myDFPlayer.play(ERROR_SOUND);
-        delay(2000);
-        state = FIGURE_1_PEND;
+        state = STATE_WRONG;
       } else if (eventHappened(FIGURE_2_PLACED)) {
         state = FIGURE_3_PEND;
       } else if (eventHappened(FIGURE_3_PLACED)) {
-        myDFPlayer.play(ERROR_SOUND);
-        delay(2000);
-        state = FIGURE_1_PEND;
+        state = STATE_WRONG;
       }
       delay(STATE_SWITCH_DELAY_MS);
       break;
@@ -268,13 +266,9 @@ void loop()
 #endif
 
       if (eventHappened(FIGURE_1_REMOVED)) {
-        myDFPlayer.play(ERROR_SOUND);
-        delay(2000);
-        state = FIGURE_1_PEND;
+        state = STATE_WRONG;
       } else if (eventHappened(FIGURE_2_REMOVED)) {
-        myDFPlayer.play(ERROR_SOUND);
-        delay(2000);
-        state = FIGURE_1_PEND;
+        state = STATE_WRONG;
       } else if (eventHappened(FIGURE_3_PLACED)) {
         state = STATE_DONE;
       }
