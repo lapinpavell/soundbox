@@ -295,7 +295,7 @@ void player_set(void)
   }
 
 #ifdef DEBUG
-  Serial.println(F("DFPlayer Mini online."));
+  Serial.println(F("DFPlayer Mini online"));
 #endif
   
   myDFPlayer.setTimeOut(MP3_SERIAL_TIMEOUT_MS); // таймаут
